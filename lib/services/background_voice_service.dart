@@ -72,20 +72,31 @@ void onServiceStart(ServiceInstance service) async {
   );
 
   final speech = stt.SpeechToText();
+
+  bool listeningForTrigger = false;
+  bool capturingContext = false;
+  String contextBuffer = '';
+  int contextRestartCount = 0;
+
+  // Forward-declare so callbacks can refer to both loops.
+  late void Function() startTriggerListening;
+  late void Function() startContextListening;
+
   final speechAvailable = await speech.initialize(
     onError: (e) => debugPrint('STT error: $e'),
-    onStatus: (s) => debugPrint('STT status: $s'),
+    onStatus: (status) {
+      if (listeningForTrigger &&
+          (status == stt.SpeechToText.doneStatus ||
+              status == stt.SpeechToText.notListeningStatus)) {
+        Timer(const Duration(seconds: 1), startTriggerListening);
+      }
+    },
   );
 
   if (!speechAvailable) {
     service.invoke('status', {'message': 'Speech recognition unavailable'});
     return;
   }
-
-  bool listeningForTrigger = false;
-  bool capturingContext = false;
-  String contextBuffer = '';
-  int contextRestartCount = 0;
 
   void updateNotification(String content) {
     if (service is AndroidServiceInstance) {
@@ -149,10 +160,6 @@ void onServiceStart(ServiceInstance service) async {
       debugPrint('Error saving lead: $e');
     }
   }
-
-  // Forward-declare as late so they can reference each other
-  late void Function() startTriggerListening;
-  late void Function() startContextListening;
 
   startContextListening = () {
     if (capturingContext) return;
@@ -238,14 +245,6 @@ void onServiceStart(ServiceInstance service) async {
     }
 
     listenLoop();
-
-    speech.statusListener = (status) {
-      if (listeningForTrigger &&
-          (status == stt.SpeechToText.doneStatus ||
-              status == stt.SpeechToText.notListeningStatus)) {
-        Timer(const Duration(seconds: 1), listenLoop);
-      }
-    };
   };
 
   service.on('start_manual_context').listen((_) async {
