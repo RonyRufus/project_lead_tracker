@@ -33,11 +33,12 @@ class ExportService {
     final path = await exportToCsv(leads);
     if (path == null) return;
 
-    await Share.shareXFiles(
-      [XFile(path, mimeType: 'text/csv')],
-      subject: 'Project Leads Export',
-      text:
-          'Exported ${leads.length} project leads from Lead Tracker.',
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(path, mimeType: 'text/csv')],
+        subject: 'Project Leads Export',
+        text: 'Exported ${leads.length} project leads from Lead Tracker.',
+      ),
     );
   }
 

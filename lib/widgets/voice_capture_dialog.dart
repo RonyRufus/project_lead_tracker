@@ -184,7 +184,7 @@ class _VoiceCaptureDialogState extends State<VoiceCaptureDialog>
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: AppTheme.primary.withOpacity(0.2),
+            color: AppTheme.primary.withValues(alpha: 0.2),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -236,7 +236,7 @@ class _VoiceCaptureDialogState extends State<VoiceCaptureDialog>
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: (_isListening ? AppTheme.recordingRed : AppTheme.primary)
-                  .withOpacity(0.1 + 0.1 * _pulseController.value),
+                  .withValues(alpha: 0.1 + 0.1 * _pulseController.value),
               border: Border.all(
                 color: _isListening
                     ? AppTheme.recordingRed
@@ -414,9 +414,9 @@ class _VoiceCaptureDialogState extends State<VoiceCaptureDialog>
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: AppTheme.primary.withOpacity(0.15),
+        color: AppTheme.primary.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,

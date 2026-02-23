@@ -102,7 +102,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.3),
+              color: AppTheme.primary.withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Icon(Icons.location_searching,
@@ -138,7 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: (_serviceRunning
                               ? AppTheme.triggerGreen
                               : AppTheme.recordingRed)
-                          .withOpacity(0.5),
+                          .withValues(alpha: 0.5),
                       blurRadius: 4,
                       blurStyle: BlurStyle.outer,
                     ),
@@ -176,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _triggerBanner() {
     return Container(
-      color: AppTheme.triggerGreen.withOpacity(0.15),
+      color: AppTheme.triggerGreen.withValues(alpha: 0.15),
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
@@ -268,7 +268,7 @@ class _SettingsSheet extends StatelessWidget {
             subtitle: 'Listens for "Save Location" trigger phrase',
             trailing: Switch(
               value: serviceRunning,
-              activeColor: AppTheme.accent,
+              activeThumbColor: AppTheme.accent,
               onChanged: (val) async {
                 final service = FlutterBackgroundService();
                 if (val) {
@@ -303,7 +303,7 @@ class _SettingsSheet extends StatelessWidget {
             child: Text(
               'Lead Tracker v1.0  •  Offline-first',
               style: TextStyle(
-                  color: AppTheme.textSecondary.withOpacity(0.5), fontSize: 11),
+                  color: AppTheme.textSecondary.withValues(alpha: 0.5), fontSize: 11),
             ),
           ),
         ],

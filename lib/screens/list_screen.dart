@@ -177,7 +177,7 @@ class _ListScreenState extends State<ListScreen> {
                 '${provider.filtered.length} results',
                 style: const TextStyle(fontSize: 11),
               ),
-              backgroundColor: AppTheme.primary.withOpacity(0.2),
+              backgroundColor: AppTheme.primary.withValues(alpha: 0.2),
               side: const BorderSide(color: Colors.transparent),
             ),
         ],
@@ -210,7 +210,7 @@ class _ListScreenState extends State<ListScreen> {
         padding: const EdgeInsets.only(right: 20),
         margin: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
-          color: AppTheme.recordingRed.withOpacity(0.8),
+          color: AppTheme.recordingRed.withValues(alpha: 0.8),
           borderRadius: BorderRadius.circular(12),
         ),
         child: const Icon(Icons.delete_outline, color: Colors.white, size: 22),
@@ -240,7 +240,7 @@ class _ListScreenState extends State<ListScreen> {
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: AppTheme.primary.withOpacity(0.2),
+                    color: AppTheme.primary.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(
@@ -315,7 +315,7 @@ class _ListScreenState extends State<ListScreen> {
         children: [
           Icon(Icons.location_off_outlined,
               size: 64,
-              color: AppTheme.textSecondary.withOpacity(0.3)),
+              color: AppTheme.textSecondary.withValues(alpha: 0.3)),
           const SizedBox(height: 16),
           Text(
             context.read<LeadsProvider>().searchQuery.isEmpty

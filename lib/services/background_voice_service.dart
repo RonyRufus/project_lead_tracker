@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:speech_to_text/speech_listen_options.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:porcupine_flutter/porcupine_manager.dart';
+import 'package:record/record.dart';
+import 'package:speech_to_text/speech_listen_options.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../models/project_lead.dart';
 import 'speech_parser.dart';
@@ -16,6 +20,10 @@ const String kTriggerPhrase = 'save location';
 const int kNotificationId = 888;
 const String kChannelId = 'lead_tracker_service';
 const String kChannelName = 'Lead Tracker Background';
+const String kPorcupineAccessKey =
+    String.fromEnvironment('PORCUPINE_ACCESS_KEY', defaultValue: '');
+const String kPorcupineKeywordPath =
+    String.fromEnvironment('PORCUPINE_KEYWORD_PATH', defaultValue: '');
 
 Future<void> initBackgroundService() async {
   final service = FlutterBackgroundService();
@@ -32,7 +40,7 @@ Future<void> initBackgroundService() async {
   await flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(channel);
+      .createNotificationChannel(channel);
 
   await service.configure(
     androidConfiguration: AndroidConfiguration(
@@ -72,23 +80,24 @@ void onServiceStart(ServiceInstance service) async {
   );
 
   final speech = stt.SpeechToText();
+  final recorder = AudioRecorder();
 
   bool listeningForTrigger = false;
   bool capturingContext = false;
   String contextBuffer = '';
   int contextRestartCount = 0;
+  PorcupineManager? porcupineManager;
 
-  // Forward-declare so callbacks can refer to both loops.
   late void Function() startTriggerListening;
   late void Function() startContextListening;
 
   final speechAvailable = await speech.initialize(
     onError: (e) => debugPrint('STT error: $e'),
     onStatus: (status) {
-      if (listeningForTrigger &&
+      if (capturingContext &&
           (status == stt.SpeechToText.doneStatus ||
               status == stt.SpeechToText.notListeningStatus)) {
-        Timer(const Duration(seconds: 1), startTriggerListening);
+        Timer(const Duration(milliseconds: 400), startContextListening);
       }
     },
   );
@@ -104,6 +113,12 @@ void onServiceStart(ServiceInstance service) async {
         title: 'Lead Tracker Active',
         content: content,
       );
+    }
+  }
+
+  Future<void> stopRecorderIfNeeded() async {
+    if (await recorder.isRecording()) {
+      await recorder.stop();
     }
   }
 
@@ -135,8 +150,7 @@ void onServiceStart(ServiceInstance service) async {
       );
 
       final dbPath = await getDatabasesPath();
-      final db =
-          await openDatabase(p.join(dbPath, 'project_leads.db'));
+      final db = await openDatabase(p.join(dbPath, 'project_leads.db'));
       await db.insert('leads', lead.toMap(),
           conflictAlgorithm: ConflictAlgorithm.replace);
       await db.close();
@@ -168,6 +182,27 @@ void onServiceStart(ServiceInstance service) async {
     contextRestartCount = 0;
     updateNotification('🎙 Recording context… speak now');
 
+    () async {
+      try {
+        final Directory tempDir = await getTemporaryDirectory();
+        final recordingPath = p.join(
+          tempDir.path,
+          'context_${DateTime.now().millisecondsSinceEpoch}.wav',
+        );
+        await recorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.wav,
+            sampleRate: 16000,
+            bitRate: 128000,
+            numChannels: 1,
+          ),
+          path: recordingPath,
+        );
+      } catch (e) {
+        debugPrint('Recorder start failed: $e');
+      }
+    }();
+
     void listenLoop() {
       if (!capturingContext) return;
       speech.listen(
@@ -180,10 +215,13 @@ void onServiceStart(ServiceInstance service) async {
               final transcript = contextBuffer.trim();
               contextBuffer = '';
               contextRestartCount = 0;
-              if (transcript.isNotEmpty) {
-                saveLeadFromContext(transcript);
-              }
-              startTriggerListening();
+              () async {
+                await stopRecorderIfNeeded();
+                if (transcript.isNotEmpty) {
+                  await saveLeadFromContext(transcript);
+                }
+                startTriggerListening();
+              }();
             } else {
               Timer(const Duration(milliseconds: 500), () {
                 if (capturingContext) listenLoop();
@@ -207,10 +245,13 @@ void onServiceStart(ServiceInstance service) async {
         capturingContext = false;
         final transcript = contextBuffer.trim();
         contextBuffer = '';
-        if (transcript.isNotEmpty) {
-          saveLeadFromContext(transcript);
-        }
-        startTriggerListening();
+        () async {
+          await stopRecorderIfNeeded();
+          if (transcript.isNotEmpty) {
+            await saveLeadFromContext(transcript);
+          }
+          startTriggerListening();
+        }();
       }
     });
   };
@@ -219,6 +260,32 @@ void onServiceStart(ServiceInstance service) async {
     if (listeningForTrigger) return;
     listeningForTrigger = true;
     updateNotification('👂 Listening for "Save Location"…');
+
+    final keywordPaths =
+        kPorcupineKeywordPath.isEmpty ? <String>[] : [kPorcupineKeywordPath];
+
+    if (kPorcupineAccessKey.isNotEmpty && keywordPaths.isNotEmpty) {
+      () async {
+        try {
+          porcupineManager ??= await PorcupineManager.fromKeywordPaths(
+            kPorcupineAccessKey,
+            keywordPaths,
+            (int keywordIndex) {
+              if (!listeningForTrigger) return;
+              listeningForTrigger = false;
+              updateNotification('🎯 Trigger detected! Speak your notes…');
+              service.invoke('trigger_detected', {'keywordIndex': keywordIndex});
+              startContextListening();
+            },
+            sensitivities: [0.6],
+          );
+          await porcupineManager?.start();
+        } catch (e) {
+          debugPrint('Porcupine start failed: $e');
+        }
+      }();
+      return;
+    }
 
     void listenLoop() {
       if (!listeningForTrigger) return;
@@ -249,6 +316,7 @@ void onServiceStart(ServiceInstance service) async {
 
   service.on('start_manual_context').listen((_) async {
     listeningForTrigger = false;
+    await porcupineManager?.stop();
     await speech.stop();
     startContextListening();
   });
@@ -256,7 +324,10 @@ void onServiceStart(ServiceInstance service) async {
   service.on('stop_service').listen((_) async {
     listeningForTrigger = false;
     capturingContext = false;
+    await porcupineManager?.stop();
+    await porcupineManager?.delete();
     await speech.stop();
+    await stopRecorderIfNeeded();
     service.stopSelf();
   });
 
