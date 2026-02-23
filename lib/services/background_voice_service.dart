@@ -3,8 +3,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:speech_to_text/speech_listen_options.dart';
+import 'package:porcupine_flutter/porcupine_manager.dart';
+import 'package:record/record.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:whisper_ggml/whisper_ggml.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
@@ -12,10 +14,14 @@ import 'package:uuid/uuid.dart';
 import '../models/project_lead.dart';
 import 'speech_parser.dart';
 
-const String kTriggerPhrase = 'save location';
 const int kNotificationId = 888;
 const String kChannelId = 'lead_tracker_service';
 const String kChannelName = 'Lead Tracker Background';
+
+// Picovoice access key for wake word detection.
+const String kPicovoiceAccessKey = 'ed5W7sSGFJVOmpltPcXW06167GJEU1taIGLczQeNKz2yCC+mvF7PpA==';
+// Path inside assets where you place the Porcupine keyword file.
+const String kKeywordAssetPath = 'assets/porcupine/location_en_android_v4_0_0.ppn';
 
 Future<void> initBackgroundService() async {
   final service = FlutterBackgroundService();
@@ -71,32 +77,9 @@ void onServiceStart(ServiceInstance service) async {
     ),
   );
 
-  final speech = stt.SpeechToText();
-
-  bool listeningForTrigger = false;
-  bool capturingContext = false;
-  String contextBuffer = '';
-  int contextRestartCount = 0;
-
-  // Forward-declare so callbacks can refer to both loops.
-  late void Function() startTriggerListening;
-  late void Function() startContextListening;
-
-  final speechAvailable = await speech.initialize(
-    onError: (e) => debugPrint('STT error: $e'),
-    onStatus: (status) {
-      if (listeningForTrigger &&
-          (status == stt.SpeechToText.doneStatus ||
-              status == stt.SpeechToText.notListeningStatus)) {
-        Timer(const Duration(seconds: 1), startTriggerListening);
-      }
-    },
-  );
-
-  if (!speechAvailable) {
-    service.invoke('status', {'message': 'Speech recognition unavailable'});
-    return;
-  }
+  final audioRecorder = Record();
+  final whisperController = WhisperController();
+  PorcupineManager? porcupineManager;
 
   void updateNotification(String content) {
     if (service is AndroidServiceInstance) {
@@ -161,104 +144,83 @@ void onServiceStart(ServiceInstance service) async {
     }
   }
 
-  startContextListening = () {
-    if (capturingContext) return;
-    capturingContext = true;
-    contextBuffer = '';
-    contextRestartCount = 0;
-    updateNotification('🎙 Recording context… speak now');
-
-    void listenLoop() {
-      if (!capturingContext) return;
-      speech.listen(
-        onResult: (result) {
-          contextBuffer = result.recognizedWords;
-          if (result.finalResult) {
-            contextRestartCount++;
-            if (contextRestartCount >= 2 || contextBuffer.length > 50) {
-              capturingContext = false;
-              final transcript = contextBuffer.trim();
-              contextBuffer = '';
-              contextRestartCount = 0;
-              if (transcript.isNotEmpty) {
-                saveLeadFromContext(transcript);
-              }
-              startTriggerListening();
-            } else {
-              Timer(const Duration(milliseconds: 500), () {
-                if (capturingContext) listenLoop();
-              });
-            }
-          }
-        },
-        listenFor: const Duration(seconds: 15),
-        pauseFor: const Duration(seconds: 3),
-        listenOptions: SpeechListenOptions(
-          cancelOnError: false,
-          partialResults: true,
-        ),
+  Future<void> transcribeWithWhisper(String audioPath) async {
+    try {
+      updateNotification('🧠 Transcribing notes…');
+      final result = await whisperController.transcribe(
+        model: WhisperModel.tinyEn,
+        audioPath: audioPath,
+        lang: 'en',
       );
-    }
-
-    listenLoop();
-
-    Timer(const Duration(seconds: 20), () {
-      if (capturingContext) {
-        capturingContext = false;
-        final transcript = contextBuffer.trim();
-        contextBuffer = '';
-        if (transcript.isNotEmpty) {
-          saveLeadFromContext(transcript);
-        }
-        startTriggerListening();
+      final transcript = result?.transcription.text?.trim() ?? '';
+      if (transcript.isNotEmpty) {
+        await saveLeadFromContext(transcript);
       }
-    });
-  };
-
-  startTriggerListening = () {
-    if (listeningForTrigger) return;
-    listeningForTrigger = true;
-    updateNotification('👂 Listening for "Save Location"…');
-
-    void listenLoop() {
-      if (!listeningForTrigger) return;
-      speech.listen(
-        onResult: (result) {
-          final text = result.recognizedWords.toLowerCase();
-          if (text.contains(kTriggerPhrase)) {
-            listeningForTrigger = false;
-            speech.stop();
-            updateNotification('🎯 Trigger detected! Speak your notes…');
-            service.invoke('trigger_detected', {});
-            Timer(const Duration(milliseconds: 300), () {
-              startContextListening();
-            });
-          }
-        },
-        listenFor: const Duration(seconds: 30),
-        pauseFor: const Duration(seconds: 3),
-        listenOptions: SpeechListenOptions(
-          cancelOnError: false,
-          partialResults: true,
-        ),
-      );
+      updateNotification('👂 Listening for "Save Location"…');
+    } catch (e) {
+      debugPrint('Whisper transcription error: $e');
+      updateNotification('⚠️ Error transcribing notes');
     }
+  }
 
-    listenLoop();
-  };
+  Future<void> startContextRecording() async {
+    try {
+      if (!await audioRecorder.hasPermission()) {
+        updateNotification('⚠️ Mic permission missing');
+        return;
+      }
+
+      if (await audioRecorder.isRecording()) {
+        await audioRecorder.stop();
+      }
+
+      final dir = await getTemporaryDirectory();
+      final filePath = p.join(dir.path, 'lead_context_${DateTime.now().millisecondsSinceEpoch}.wav');
+
+      updateNotification('🎙 Recording context… speak now');
+
+      await audioRecorder.start(
+        path: filePath,
+        encoder: AudioEncoder.wav,
+        bitRate: 128000,
+        samplingRate: 16000,
+      );
+
+      Timer(const Duration(seconds: 15), () async {
+        final path = await audioRecorder.stop();
+        if (path != null) {
+          await transcribeWithWhisper(path);
+        } else {
+          updateNotification('👂 Listening for "Save Location"…');
+        }
+      });
+    } catch (e) {
+      debugPrint('Recording error: $e');
+      updateNotification('⚠️ Error recording notes');
+    }
+  }
+
+  porcupineManager = await PorcupineManager.fromKeywordPaths(
+    accessKey: kPicovoiceAccessKey,
+    keywordPaths: [kKeywordAssetPath],
+    sensitivities: [0.6],
+    onKeywordDetected: (index) async {
+      updateNotification('🎯 Trigger detected! Recording notes…');
+      service.invoke('trigger_detected', {});
+      await startContextRecording();
+    },
+  );
+
+  await porcupineManager.start();
 
   service.on('start_manual_context').listen((_) async {
-    listeningForTrigger = false;
-    await speech.stop();
-    startContextListening();
+    updateNotification('🎙 Manual recording… speak now');
+    await startContextRecording();
   });
 
   service.on('stop_service').listen((_) async {
-    listeningForTrigger = false;
-    capturingContext = false;
-    await speech.stop();
+    await audioRecorder.stop();
+    await porcupineManager?.stop();
     service.stopSelf();
   });
-
-  startTriggerListening();
 }

@@ -24,9 +24,6 @@ void main() async {
     systemNavigationBarIconBrightness: Brightness.light,
   ));
 
-  // Initialise background service configuration
-  await initBackgroundService();
-
   runApp(
     ChangeNotifierProvider(
       create: (_) => LeadsProvider(),
