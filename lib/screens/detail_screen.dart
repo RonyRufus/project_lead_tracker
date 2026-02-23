@@ -161,7 +161,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                 Border.all(color: Colors.white, width: 2.5),
                             boxShadow: [
                               BoxShadow(
-                                color: AppTheme.markerColor.withOpacity(0.6),
+                                color: AppTheme.markerColor.withValues(alpha: 0.6),
                                 blurRadius: 8,
                                 blurStyle: BlurStyle.outer,
                               )
